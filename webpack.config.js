@@ -150,6 +150,12 @@ export default async (env, argv) => {
         "process.env.VITE_PRIVY_CLIENT_ID": JSON.stringify(
           process.env.VITE_PRIVY_CLIENT_ID,
         ),
+        "process.env.CONTRACT_ADDRESS": JSON.stringify(
+          process.env.CONTRACT_ADDRESS,
+        ),
+        "process.env.GAME_SERVER_PRIVATE_KEY": JSON.stringify(
+          process.env.GAME_SERVER_PRIVATE_KEY,
+        ),
       }),
       new CopyPlugin({
         patterns: [

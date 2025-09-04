@@ -12,3 +12,5 @@ resources/.DS_Store
 CLAUDE.md
 .husky/
 .vercel
+broadcast/
+cache/
