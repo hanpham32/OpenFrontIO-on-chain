@@ -1,11 +1,16 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import { ApiEnvResponse, ApiPublicLobbiesResponse } from "../core/ExpressSchemas";
-import { GameInfo, ID } from "../core/Schemas";
 import { LimiterType, gatekeeper } from "./Gatekeeper";
+import { GameInfo } from "../core/Schemas";
+import { ID } from "../core/BaseSchemas";
 import { MapPlaylist } from "./MapPlaylist";
+import { GameEnv } from "../core/configuration/Config";
 import cluster from "cluster";
 import express from "express";
+import { createRequire } from "module";
 import { fileURLToPath } from "url";
+const require = createRequire(import.meta.url);
+const cors = require("cors");
 import { generateID } from "../core/Util";
 import { getServerConfigFromServer } from "../core/configuration/ConfigLoader";
 import http from "http";
@@ -24,6 +29,46 @@ const log = logger.child({ comp: "m" });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Configure CORS
+const corsOptions = {
+  origin: (origin: string | undefined, callback: any) => {
+    // Allow requests with no origin (like mobile apps or Postman)
+    if (!origin) {
+      return callback(null, true);
+    }
+    
+    // In production, allow specific origins
+    const allowedOrigins = [
+      'http://localhost:9000',
+      'http://localhost:3000',
+      'https://localhost:9000',
+      'https://localhost:3000',
+    ];
+    
+    // Add Vercel deployment URLs
+    if (origin.includes('vercel.app') || origin.includes('openfrontio')) {
+      return callback(null, true);
+    }
+    
+    // Check if origin is in allowed list
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      // In dev mode, allow all origins
+      if (config.env() === GameEnv.Dev) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(
   express.static(path.join(__dirname, "../../static"), {
@@ -105,15 +150,16 @@ export async function startMaster() {
           });
         };
 
-        setInterval(
-          () =>
-            fetchLobbies().then((lobbies) => {
-              if (lobbies === 0) {
-                scheduleLobbies();
-              }
-            }),
-          100,
-        );
+        // Disabled automatic lobby generation - lobbies should only be created by users
+        // setInterval(
+        //   () =>
+        //     fetchLobbies().then((lobbies) => {
+        //       if (lobbies === 0) {
+        //         scheduleLobbies();
+        //       }
+        //     }),
+        //   100,
+        // );
       }
     }
   });
@@ -153,7 +199,7 @@ app.get(
   "/api/env",
   gatekeeper.httpHandler(LimiterType.Get, async (req, res) => {
     const envConfig: ApiEnvResponse = {
-      game_env: process.env.GAME_ENV ?? "",
+      game_env: process.env.GAME_ENV || "dev",
     };
     if (!envConfig.game_env) return res.sendStatus(500);
     res.json(envConfig);
@@ -206,6 +252,8 @@ app.post(
   }),
 );
 
+
+// TODO: update this fetchLobbies to fetch from blockchain for lobbies
 async function fetchLobbies(): Promise<number> {
   const fetchPromises: Promise<GameInfo | null>[] = [];
 

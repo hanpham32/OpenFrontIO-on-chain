@@ -16,6 +16,7 @@ import { ReplaySpeedChangeEvent } from "./InputHandler";
 import { defaultReplaySpeedMultiplier } from "./utilities/ReplaySpeedMultiplier";
 import { getPersistentID } from "./Main";
 import { z } from "zod";
+import { getApiBaseUrl } from "./ApiClient";
 
 export class LocalServer {
   // All turns from the game record on replay.
@@ -24,7 +25,7 @@ export class LocalServer {
   private readonly turns: Turn[] = [];
 
   private intents: Intent[] = [];
-  private startedAt: number;
+  private startedAt = 0;
 
   private paused = false;
   private replaySpeedMultiplier = defaultReplaySpeedMultiplier;
@@ -35,7 +36,7 @@ export class LocalServer {
   private turnsExecuted = 0;
   private turnStartTime = 0;
 
-  private turnCheckInterval: ReturnType<typeof setTimeout>;
+  private turnCheckInterval: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly lobbyConfig: LobbyConfig,
@@ -183,6 +184,7 @@ export class LocalServer {
         persistentID: getPersistentID(),
         username: this.lobbyConfig.playerName,
         clientID: this.lobbyConfig.clientID,
+        walletAddress: this.lobbyConfig.walletAddress || "",
         stats: this.allPlayersStats[this.lobbyConfig.clientID],
       },
     ];
@@ -216,6 +218,7 @@ export class LocalServer {
     const workerPath = this.lobbyConfig.serverConfig.workerPath(
       this.lobbyConfig.gameStartInfo.gameID,
     );
-    navigator.sendBeacon(`/${workerPath}/api/archive_singleplayer_game`, blob);
+    const baseUrl = getApiBaseUrl();
+    navigator.sendBeacon(`${baseUrl}/${workerPath}/api/archive_singleplayer_game`, blob);
   }
 }

@@ -210,6 +210,17 @@
           block
         ></o-button>
 
+        <o-button id="connect-wallet" title="Connect your wallet" block>
+        </o-button>
+
+        <o-button
+          id="disconnect-wallet"
+          title="Disconnect your wallet"
+          visible="false"
+          block
+        >
+        </o-button>
+
         <div class="container__row">
           <flag-input class="w-[20%] md:w-[15%]"></flag-input>
           <territory-patterns-modal class="w-[20%] md:w-[15%]">
@@ -226,7 +237,8 @@
         </div>
         <div></div>
         <div>
-          <public-lobby class="block"></public-lobby>
+          <o-button id="browse-lobby-button" title="Browse Lobby" block>
+          </o-button>
         </div>
         <div class="container__row container__row--equal">
           <o-button
@@ -392,6 +404,7 @@
     <!-- Game modals and overlays -->
     <single-player-modal></single-player-modal>
     <host-lobby-modal></host-lobby-modal>
+    <browse-lobby-modal></browse-lobby-modal>
     <join-private-lobby-modal></join-private-lobby-modal>
     <emoji-table></emoji-table>
     <build-menu></build-menu>

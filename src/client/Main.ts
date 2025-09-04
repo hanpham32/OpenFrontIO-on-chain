@@ -1,3 +1,4 @@
+import "./BrowseLobbyModal";
 import "./DarkModeButton";
 import "./FlagInput";
 import "./GoogleAdElement";
@@ -7,8 +8,29 @@ import "./UsernameInput";
 import "./components/NewsButton";
 import "./components/baseComponents/Button";
 import "./components/baseComponents/Modal";
+import "./graphics/layers/OptionsMenu";
+import "./graphics/layers/PlayerInfoOverlay"; 
+import "./graphics/layers/HeadsUpMessage";
+import "./graphics/layers/ChatDisplay";
+import "./graphics/layers/EventsDisplay";
+import "./graphics/layers/ControlPanel";
+import "./graphics/layers/GutterAdModal";
+import "./graphics/layers/ReplayPanel";
+import "./graphics/layers/GameRightSidebar";
+import "./graphics/layers/SettingsModal";
+import "./graphics/layers/PlayerPanel";
+import "./graphics/layers/AlertFrame";
+import "./graphics/layers/ChatModal";
+import "./graphics/layers/MultiTabModal";
+import "./graphics/layers/GameLeftSidebar";
+import "./graphics/layers/SpawnAd";
+import "./graphics/layers/FPSDisplay";
+import "./graphics/layers/EmojiTable";
+import "./graphics/layers/BuildMenu";
+import "./graphics/layers/WinModal";
+import "./graphics/layers/UnitDisplay";
 import "./styles.css";
-import { GameRecord, GameStartInfo, ID } from "../core/Schemas";
+import { GameRecord, GameStartInfo } from "../core/Schemas";
 import { discordLogin, getUserMe, isLoggedIn, logOut } from "./jwt";
 import { generateCryptoRandomUUID, incrementGamesPlayed, translateText } from "./Utils";
 import { DarkModeButton } from "./DarkModeButton";
@@ -18,7 +40,9 @@ import { FlagInputModal } from "./FlagInputModal";
 import { GameStartingModal } from "./GameStartingModal";
 import { GameType } from "../core/game/Game";
 import { HelpModal } from "./HelpModal";
+import { BrowseLobbyModal } from "./BrowseLobbyModal";
 import { HostLobbyModal } from "./HostLobbyModal";
+import { ID } from "../core/BaseSchemas";
 import { JoinPrivateLobbyModal } from "./JoinPrivateLobbyModal";
 import { LangSelector } from "./LangSelector";
 import { LanguageModal } from "./LanguageModal";
@@ -34,6 +58,7 @@ import { UserMeResponse } from "../core/ApiSchemas";
 import { UserSettingModal } from "./UserSettingModal";
 import { UserSettings } from "../core/game/UserSettings";
 import { UsernameInput } from "./UsernameInput";
+import { getClientID } from "../core/Util";
 import { getServerConfigFromClient } from "../core/configuration/ConfigLoader";
 import { joinLobby } from "./ClientGameRunner";
 import version from "../../resources/version.txt";
@@ -57,6 +82,7 @@ declare global {
       };
       spaNewPage: (url: string) => void;
     };
+    ethereum?: any;
   }
 
   // Extend the global interfaces to include your custom events
@@ -75,6 +101,10 @@ export type JoinLobbyEvent = {
   gameStartInfo?: GameStartInfo;
   // GameRecord exists when replaying an archived game.
   gameRecord?: GameRecord;
+  // Betting amount in ETH for on-chain lobbies
+  bettingAmount?: string;
+  // Wallet address for blockchain integration
+  walletAddress?: string;
 };
 
 export type KickPlayerEvent = {
@@ -89,11 +119,11 @@ class Client {
   private flagInput: FlagInput | null = null;
   private darkModeButton: DarkModeButton | null = null;
 
-  private joinModal: JoinPrivateLobbyModal;
-  private publicLobby: PublicLobby;
+  private joinModal: JoinPrivateLobbyModal | undefined;
+  private publicLobby: PublicLobby | undefined;
   private readonly userSettings: UserSettings = new UserSettings();
 
-  constructor() {}
+  constructor() { }
 
   initialize(): void {
     const gameVersion = document.getElementById(
@@ -218,14 +248,7 @@ class Client {
     if (patternButton === null)
       throw new Error("territory-patterns-input-preview-button");
     territoryModal.previewButton = patternButton;
-    territoryModal.updatePreview();
-    territoryModal.resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        if (entry.target.classList.contains("preview-container")) {
-          territoryModal.buttonWidth = entry.contentRect.width;
-        }
-      }
-    });
+    territoryModal.refresh();
     patternButton.addEventListener("click", () => {
       territoryModal.open();
     });
@@ -318,7 +341,7 @@ class Client {
         // Authorized
         console.log(
           `Your player ID is ${userMeResponse.player.publicId}\n` +
-            "Sharing this ID will allow others to view your game history and stats.",
+          "Sharing this ID will allow others to view your game history and stats.",
         );
         loginDiscordButton.translationKey = "main.logged_in";
         loginDiscordButton.hidden = true;
@@ -363,7 +386,20 @@ class Client {
     hostLobbyButton.addEventListener("click", () => {
       if (this.usernameInput?.isValid()) {
         hostModal.open();
-        this.publicLobby.leaveLobby();
+        this.publicLobby?.leaveLobby();
+      }
+    });
+
+    const browseModal = document.querySelector(
+      "browse-lobby-modal",
+    ) as BrowseLobbyModal;
+    browseModal instanceof BrowseLobbyModal;
+    const browseLobbyButton = document.getElementById("browse-lobby-button");
+    if (browseLobbyButton === null) throw new Error("Missing browse-lobby-button");
+    browseLobbyButton.addEventListener("click", () => {
+      if (this.usernameInput?.isValid()) {
+        browseModal.open();
+        this.publicLobby?.leaveLobby();
       }
     });
 
@@ -378,7 +414,7 @@ class Client {
       throw new Error("Missing join-private-lobby-button");
     joinPrivateLobbyButton.addEventListener("click", () => {
       if (this.usernameInput?.isValid()) {
-        this.joinModal.open();
+        this.joinModal?.open();
       }
     });
 
@@ -393,7 +429,7 @@ class Client {
 
     const onHashUpdate = () => {
       // Reset the UI to its initial state
-      this.joinModal.close();
+      this.joinModal?.close();
       if (this.gameStop !== null) {
         this.handleLeaveLobby();
       }
@@ -422,6 +458,123 @@ class Client {
         updateSliderProgress(slider);
         slider.addEventListener("input", () => updateSliderProgress(slider));
       });
+
+    const connectWalletButton = document.getElementById(
+      "connect-wallet",
+    ) as OButton;
+    const disconnectWalletButton = document.getElementById(
+      "disconnect-wallet",
+    ) as OButton;
+
+    // Initialize wallet button states
+    this.initializeWalletButtons(connectWalletButton, disconnectWalletButton);
+
+    connectWalletButton.addEventListener("click", async () => {
+      try {
+        console.log("Attempting to connect wallet...");
+
+        // Import wallet utilities
+        const { wagmiConfig } = await import("./wallet");
+        const { connect, getAccount } = await import("@wagmi/core");
+        const { injected } = await import("@wagmi/connectors");
+
+        console.log("Wagmi config loaded:", wagmiConfig);
+
+        // Check if already connected
+        const account = getAccount(wagmiConfig);
+        if (account.isConnected) {
+          console.log("Already connected:", account.address);
+          connectWalletButton.title = `Connected: ${account.address?.slice(0, 6)}...`;
+          connectWalletButton.disable = true;
+          connectWalletButton.hidden = true;
+          disconnectWalletButton.hidden = false;
+          return;
+        }
+
+        // Try connecting with injected wallet
+        console.log("Attempting to connect with injected connector...");
+        
+        // Check if MetaMask or other wallet is available
+        if (typeof window.ethereum === 'undefined') {
+          throw new Error("No wallet extension found. Please install MetaMask or similar wallet.");
+        }
+        
+        // Create the injected connector
+        const connector = injected({
+          target: 'metaMask',
+        });
+        
+        console.log("Injected connector created:", connector);
+        
+        const result = await connect(wagmiConfig, { connector });
+        console.log("Connection successful:", result);
+
+        // Update button states
+        connectWalletButton.title = `Connected: ${result.accounts[0].slice(0, 6)}...`;
+        connectWalletButton.disable = true;
+        connectWalletButton.hidden = true;
+        disconnectWalletButton.title = `Disconnect: ${result.accounts[0].slice(0, 6)}...`;
+        disconnectWalletButton.hidden = false;
+      } catch (error) {
+        console.error("Wallet connection error details:", error);
+
+        // More specific error handling
+        if (error instanceof Error) {
+          if (error.message.includes("User rejected")) {
+            alert("Connection cancelled by user.");
+          } else if (error.message.includes("No injected provider")) {
+            alert("No wallet extension found. Please install MetaMask or similar wallet.");
+          } else {
+            alert(`Connection failed: ${error.message}`);
+          }
+        } else {
+          alert("Failed to connect wallet. Please try again.");
+        }
+      }
+    });
+
+    disconnectWalletButton.addEventListener("click", async () => {
+      try {
+        console.log("Attempting to disconnect wallet...");
+
+        // Import wallet utilities
+        const { wagmiConfig } = await import("./wallet");
+        const { disconnect, getAccount } = await import("@wagmi/core");
+
+        // Check if actually connected
+        const account = getAccount(wagmiConfig);
+        if (!account.isConnected) {
+          console.log("No wallet connected");
+          // Reset button states anyway
+          connectWalletButton.hidden = false;
+          connectWalletButton.disable = false;
+          connectWalletButton.title = "Connect your wallet";
+          disconnectWalletButton.hidden = true;
+          return;
+        }
+
+        console.log("Disconnecting wallet:", account.address);
+        
+        // Disconnect the wallet
+        await disconnect(wagmiConfig);
+        console.log("Wallet disconnected successfully");
+
+        // Update button states
+        connectWalletButton.hidden = false;
+        connectWalletButton.disable = false;
+        connectWalletButton.title = "Connect your wallet";
+        disconnectWalletButton.hidden = true;
+
+      } catch (error) {
+        console.error("Wallet disconnection error details:", error);
+        
+        if (error instanceof Error) {
+          alert(`Disconnection failed: ${error.message}`);
+        } else {
+          alert("Failed to disconnect wallet. Please try again.");
+        }
+      }
+    });
   }
 
   private handleHash() {
@@ -447,7 +600,7 @@ class Client {
       }
       const lobbyId = params.get("join");
       if (lobbyId && ID.safeParse(lobbyId).success) {
-        this.joinModal.open(lobbyId);
+        this.joinModal?.open(lobbyId);
         console.log(`joining lobby ${lobbyId}`);
       }
     }
@@ -474,7 +627,8 @@ class Client {
             : this.flagInput.getCurrentFlag(),
         playerName: this.usernameInput?.getCurrentUsername() ?? "",
         token: getPlayToken(),
-        clientID: lobby.clientID,
+        clientID: getClientID(lobby.gameID),
+        walletAddress: lobby.walletAddress || await this.getCurrentWalletAddress() || "",
         gameStartInfo: lobby.gameStartInfo ?? lobby.gameRecord?.info,
         gameRecord: lobby.gameRecord,
       },
@@ -507,7 +661,7 @@ class Client {
             modal.isModalOpen = false;
           }
         });
-        this.publicLobby.stop();
+        this.publicLobby?.stop();
         document.querySelectorAll(".ad").forEach((ad) => {
           (ad as HTMLElement).style.display = "none";
         });
@@ -520,8 +674,8 @@ class Client {
         startingModal.show();
       },
       () => {
-        this.joinModal.close();
-        this.publicLobby.stop();
+        this.joinModal?.close();
+        this.publicLobby?.stop();
         incrementGamesPlayed();
 
         try {
@@ -548,7 +702,7 @@ class Client {
     console.log("leaving lobby, cancelling game");
     this.gameStop();
     this.gameStop = null;
-    this.publicLobby.leaveLobby();
+    this.publicLobby?.leaveLobby();
   }
 
   private handleKickPlayer(event: CustomEvent<KickPlayerEvent>) {
@@ -557,6 +711,49 @@ class Client {
     // Forward to eventBus if available
     if (this.eventBus) {
       this.eventBus.emit(new SendKickPlayerIntentEvent(target));
+    }
+  }
+
+  private async getCurrentWalletAddress(): Promise<string | undefined> {
+    try {
+      const { getCurrentWalletAddress } = await import("./wallet");
+      const address = getCurrentWalletAddress();
+      console.log("Getting current wallet address:", address);
+      return address;
+    } catch (error) {
+      console.warn("Failed to get wallet address:", error);
+      return undefined;
+    }
+  }
+
+  private async initializeWalletButtons(connectButton: OButton, disconnectButton: OButton) {
+    try {
+      // Import wallet utilities
+      const { wagmiConfig } = await import("./wallet");
+      const { getAccount } = await import("@wagmi/core");
+
+      // Check current connection status
+      const account = getAccount(wagmiConfig);
+      
+      if (account.isConnected && account.address) {
+        console.log("Wallet already connected:", account.address);
+        // Show disconnect button, hide connect button
+        connectButton.hidden = true;
+        disconnectButton.hidden = false;
+        disconnectButton.title = `Disconnect: ${account.address.slice(0, 6)}...`;
+      } else {
+        console.log("No wallet connected");
+        // Show connect button, hide disconnect button
+        connectButton.hidden = false;
+        connectButton.title = "Connect your wallet";
+        disconnectButton.hidden = true;
+      }
+    } catch (error) {
+      console.warn("Failed to initialize wallet buttons:", error);
+      // Default to showing connect button on error
+      connectButton.hidden = false;
+      connectButton.title = "Connect your wallet";
+      disconnectButton.hidden = true;
     }
   }
 }

@@ -10,6 +10,7 @@ import {
   Trios,
   UnitType,
 } from "./game/Game";
+import { ID } from "./BaseSchemas";
 import { PatternDecoder } from "./PatternDecoder";
 import { PlayerStatsSchema } from "./StatsSchemas";
 import { base64url } from "jose";
@@ -120,6 +121,13 @@ export enum LogSeverity {
   Fatal = "FATAL",
 }
 
+export enum GameStatus {
+  Created = "Created",
+  InProgress = "InProgress", 
+  Finished = "Finished",
+  Claimed = "Claimed",
+}
+
 //
 // Utility types
 //
@@ -176,10 +184,6 @@ const EmojiSchema = z
   .number()
   .nonnegative()
   .max(flattenedEmojiTable.length - 1);
-export const ID = z
-  .string()
-  .regex(/^[a-zA-Z0-9]+$/)
-  .length(8);
 
 export const AllPlayersStatsSchema = z.record(ID, PlayerStatsSchema);
 
@@ -414,6 +418,7 @@ export const PlayerSchema = z.object({
   flag: FlagSchema,
   pattern: PatternSchema,
   username: UsernameSchema,
+  walletAddress: z.string(),
 });
 
 export const GameStartInfoSchema = z.object({
@@ -520,6 +525,7 @@ export const ClientJoinMessageSchema = z.object({
   token: TokenSchema, // WARNING: PII
   type: z.literal("join"),
   username: UsernameSchema,
+  walletAddress: z.string(),
 });
 
 export const ClientMessageSchema = z.discriminatedUnion("type", [

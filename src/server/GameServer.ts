@@ -25,6 +25,7 @@ import { gatekeeper } from "./Gatekeeper";
 import ipAnonymize from "ip-anonymize";
 import { postJoinMessageHandler } from "./worker/websocket/handler/message/PostJoinHandler";
 import { z } from "zod";
+import { startGame as startGameOnChain, isLobbyOnChain } from "./contract";
 
 export enum GamePhase {
   Lobby = "LOBBY",
@@ -63,6 +64,9 @@ export class GameServer {
 
   kickedClients: Set<ClientID> = new Set();
   outOfSyncClients: Set<ClientID> = new Set();
+
+  // Blockchain integration
+  winnerDeclaredTxHash: string | null = null;
 
   private readonly websockets: Set<WebSocket> = new Set();
 
@@ -301,6 +305,7 @@ export class GameServer {
         flag: c.flag,
         pattern: c.pattern,
         username: c.username,
+        walletAddress: c.walletAddress || "",
       })),
     });
     if (!result.success) {
@@ -320,6 +325,14 @@ export class GameServer {
         persistentID: c.persistentID,
       });
       this.sendStartGameMsg(c.ws, 0);
+    });
+
+    // Start game on blockchain if this is an on-chain lobby
+    this.startGameOnChain().catch((error) => {
+      this.log.error("❌ Failed to start game on blockchain", {
+        gameID: this.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
   }
 
@@ -364,6 +377,50 @@ export class GameServer {
     this.activeClients.forEach((c) => {
       c.ws.send(msg);
     });
+  }
+
+  private async startGameOnChain(): Promise<void> {
+    try {
+      // Check if this game corresponds to an on-chain lobby
+      const lobbyId = this.id;
+      
+      this.log.info("Checking if game should be started on-chain", { gameID: lobbyId });
+      
+      const isOnChain = await isLobbyOnChain(lobbyId);
+      if (!isOnChain) {
+        this.log.info("Game is not on-chain, skipping blockchain start", {
+          gameID: lobbyId,
+        });
+        return;
+      }
+
+      this.log.info("🚀 Starting game on blockchain", {
+        gameID: lobbyId,
+      });
+
+      // Call smart contract to start game
+      const txHash = await startGameOnChain({
+        lobbyId,
+      });
+
+      if (txHash) {
+        this.log.info("Game successfully started on blockchain", {
+          gameID: lobbyId,
+          transactionHash: txHash,
+        });
+      } else {
+        this.log.error("Failed to start game on blockchain - no transaction hash returned", {
+          gameID: lobbyId,
+        });
+      }
+    } catch (error) {
+      this.log.error("Error in blockchain game start", {
+        gameID: this.id,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      // Don't throw - we don't want blockchain failures to break the game
+    }
   }
 
   async end() {
@@ -558,6 +615,10 @@ export class GameServer {
     return this.clientsDisconnectedStatus.get(clientID) ?? true;
   }
 
+  public getClient(clientID: ClientID): Client | undefined {
+    return this.allClients.get(clientID);
+  }
+
   private markClientDisconnected(clientID: string, isDisconnected: boolean) {
     this.clientsDisconnectedStatus.set(clientID, isDisconnected);
     this.addIntent({
@@ -571,6 +632,7 @@ export class GameServer {
     this.log.info("archiving game", {
       gameID: this.id,
       winner: this.winner?.winner,
+      winnerDeclaredTxHash: this.winnerDeclaredTxHash,
     });
 
     // Players must stay in the same order as the game start info.
@@ -586,6 +648,7 @@ export class GameServer {
             this.allClients.get(player.clientID)?.persistentID ?? "",
           stats,
           username: player.username,
+          walletAddress: this.allClients.get(player.clientID)?.walletAddress ?? "",
         } satisfies PlayerRecord;
       },
     );
@@ -662,8 +725,8 @@ export class GameServer {
 
     // Count occurrences of each hash
     for (const client of this.activeClients) {
-      if (client.hashes.has(turnNumber)) {
-        const clientHash = client.hashes.get(turnNumber)!;
+      const clientHash = client.hashes.get(turnNumber);
+      if (clientHash !== undefined) {
         counts.set(clientHash, (counts.get(clientHash) ?? 0) + 1);
       }
     }
@@ -683,8 +746,8 @@ export class GameServer {
     let outOfSyncClients: Client[] = [];
 
     for (const client of this.activeClients) {
-      if (client.hashes.has(turnNumber)) {
-        const clientHash = client.hashes.get(turnNumber)!;
+      const clientHash = client.hashes.get(turnNumber);
+      if (clientHash !== undefined) {
         if (clientHash !== mostCommonHash) {
           outOfSyncClients.push(client);
         }

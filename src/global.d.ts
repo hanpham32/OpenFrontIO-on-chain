@@ -40,3 +40,11 @@ declare module "*.xml" {
   const value: string;
   export default value;
 }
+
+declare namespace NodeJS {
+  interface ProcessEnv {
+    readonly VITE_WALLETCONNECT_PROJECT_ID: string
+    readonly VITE_PRIVY_APP_ID: string
+    readonly VITE_PRIVY_CLIENT_ID: string
+  }
+}

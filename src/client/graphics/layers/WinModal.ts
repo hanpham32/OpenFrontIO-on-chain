@@ -7,11 +7,12 @@ import { GutterAdModalEvent } from "./GutterAdModal";
 import { Layer } from "./Layer";
 import { SendWinnerEvent } from "../../Transport";
 import { translateText } from "../../../client/Utils";
+import { claimPrize, getLobbyInfo, GameStatus, type LobbyInfo, watchLobbyEvents, type ContractEventCallbacks } from "../../contract";
 
 @customElement("win-modal")
 export class WinModal extends LitElement implements Layer {
-  public game: GameView;
-  public eventBus: EventBus;
+  public game: GameView | undefined;
+  public eventBus: EventBus | undefined;
 
   private hasShownDeathModal = false;
 
@@ -21,7 +22,25 @@ export class WinModal extends LitElement implements Layer {
   @state()
   showButtons = false;
 
-  private _title: string;
+  @state()
+  private claimingPrize = false;
+
+  @state()
+  private prizeClaimStatus = "";
+
+  @state()
+  private lobbyInfo: LobbyInfo | null = null;
+
+  @state()
+  private checkingLobbyStatus = false;
+
+  @state()
+  private lobbyStatusError = "";
+
+  private _title = "";
+  private currentGameId = "";
+  private lobbyStatusCheckInterval: ReturnType<typeof setInterval> | null = null;
+  private eventUnwatcher: (() => void) | null = null;
 
   // Override to prevent shadow DOM creation
   createRenderRoot() {
@@ -137,11 +156,25 @@ export class WinModal extends LitElement implements Layer {
   render() {
     return html`
       <div class="win-modal ${this.isVisible ? "visible" : ""}">
-        <h2>${this._title || ""}</h2>
-        ${this.innerHtml()}
+        <h2>${this._title}</h2>
+        ${this.renderLobbyStatus()}
+        ${this.prizeClaimStatus ? html`
+          <p style="color: ${this.prizeClaimStatus.includes('Success') ? '#4a9eff' : '#ff4a4a'}; text-align: center; margin: 10px 0;">
+            ${this.prizeClaimStatus}
+          </p>
+        ` : ''}
         <div
           class="button-container ${this.showButtons ? "visible" : "hidden"}"
         >
+          ${this.shouldShowClaimButton() ? html`
+            <button 
+              @click=${this._handleClaimPrize}
+              ?disabled=${this.claimingPrize}
+              style="background: ${this.claimingPrize ? 'rgba(100, 100, 100, 0.6)' : 'rgba(0, 200, 0, 0.6)'};"
+            >
+              ${this.claimingPrize ? 'Claiming...' : 'Claim Prize'}
+            </button>
+          ` : ''}
           <button @click=${this._handleExit}>
             ${translateText("win_modal.exit")}
           </button>
@@ -153,32 +186,90 @@ export class WinModal extends LitElement implements Layer {
     `;
   }
 
-  innerHtml() {
-    return html`<p>
-      <a
-        href="https://store.steampowered.com/app/3560670"
-        target="_blank"
-        rel="noopener noreferrer"
-        style="
-          color: #4a9eff;
-          text-decoration: underline;
-          font-weight: 500;
-          transition: color 0.2s ease;
-          font-size: 24px;
-        "
-        onmouseover="this.style.color='#6db3ff'"
-        onmouseout="this.style.color='#4a9eff'"
-      >
-        ${translateText("win_modal.wishlist")}
-      </a>
-    </p>`;
+  renderLobbyStatus() {
+    if (!this.currentGameId) return '';
+
+    if (this.checkingLobbyStatus) {
+      return html`
+        <div style="text-align: center; margin: 10px 0; color: #ccc; font-size: 14px;">
+          🔍 Checking blockchain status...
+        </div>
+      `;
+    }
+
+    if (this.lobbyStatusError) {
+      return html`
+        <div style="text-align: center; margin: 10px 0; padding: 8px; 
+                   background-color: #f8d7da; border: 1px solid #f5c6cb; 
+                   border-radius: 4px; color: #721c24; font-size: 14px;">
+          <strong>Blockchain Error:</strong> ${this.lobbyStatusError}
+        </div>
+      `;
+    }
+
+    if (!this.lobbyInfo) return '';
+
+    const statusText = GameStatus[this.lobbyInfo.status];
+    const statusColor = this.getStatusColor(this.lobbyInfo.status);
+
+    return html`
+      <div style="text-align: center; margin: 10px 0; padding: 10px; 
+                 background-color: rgba(50, 50, 50, 0.8); 
+                 border-radius: 6px; font-size: 14px;">
+        <div style="margin-bottom: 8px;">
+          <strong style="color: #ccc;">Game Status:</strong>
+          <span style="color: ${statusColor}; font-weight: bold; margin-left: 8px;">
+            ${statusText}
+          </span>
+        </div>
+        
+        ${this.lobbyInfo.status === GameStatus.Claimed ? html`
+          <div style="color: #4a9eff; margin-top: 8px;">
+            🎉 <strong>Prize Already Claimed!</strong>
+          </div>
+          <div style="color: #aaa; font-size: 12px; margin-top: 4px;">
+            Total Prize: ${this.formatEther(this.lobbyInfo.totalPrize)} ETH
+          </div>
+        ` : this.lobbyInfo.status === GameStatus.Finished ? html`
+          <div style="color: #ffa500; margin-top: 8px;">
+            🏆 <strong>Ready to Claim Prize!</strong>
+          </div>
+          <div style="color: #aaa; font-size: 12px; margin-top: 4px;">
+            Prize Pool: ${this.formatEther(this.lobbyInfo.totalPrize)} ETH
+          </div>
+        ` : this.lobbyInfo.status === GameStatus.InProgress ? html`
+          <div style="color: #90ee90; margin-top: 8px;">
+            ${this._title.includes(translateText("win_modal.you_won")) ? html`
+              🏆 <strong>You Won!</strong> Waiting for server confirmation...
+            ` : html`
+              🎮 Game in Progress
+            `}
+          </div>
+          ${this._title.includes(translateText("win_modal.you_won")) ? html`
+            <div style="color: #aaa; font-size: 12px; margin-top: 4px;">
+              The server will declare you as winner shortly, then you can claim your prize.
+            </div>
+          ` : ''}
+        ` : html`
+          <div style="color: #ccc; margin-top: 8px;">
+            ⏳ Game Created
+          </div>
+        `}
+      </div>
+    `;
   }
 
   show() {
-    this.eventBus.emit(new GutterAdModalEvent(true));
+    this.eventBus?.emit(new GutterAdModalEvent(true));
     setTimeout(() => {
       this.isVisible = true;
       this.requestUpdate();
+      
+      // Start watching blockchain events and do initial status check
+      if (this.currentGameId) {
+        this.startWatchingBlockchainEvents();
+        this.checkLobbyStatus();
+      }
     }, 1500);
     setTimeout(() => {
       this.showButtons = true;
@@ -186,11 +277,141 @@ export class WinModal extends LitElement implements Layer {
     }, 3000);
   }
 
+  private startWatchingBlockchainEvents() {
+    if (!this.currentGameId || this.eventUnwatcher) return;
+
+    console.log('Starting to watch blockchain events for lobby:', this.currentGameId);
+
+    const callbacks: ContractEventCallbacks = {
+      onGameStarted: (lobbyId) => {
+        console.log('🎮 Game started event received for lobby:', lobbyId);
+        this.handleBlockchainStatusChange();
+      },
+      
+      onWinnerDeclared: (lobbyId, winner) => {
+        console.log('🏆 Winner declared event received for lobby:', lobbyId, 'winner:', winner);
+        this.handleBlockchainStatusChange();
+      },
+      
+      onPrizeClaimed: (lobbyId, winner, amount) => {
+        console.log('🎉 Prize claimed event received for lobby:', lobbyId, 'winner:', winner, 'amount:', amount);
+        this.handleBlockchainStatusChange();
+      }
+    };
+
+    this.eventUnwatcher = watchLobbyEvents(this.currentGameId, callbacks);
+  }
+
+  private async handleBlockchainStatusChange() {
+    console.log('Handling blockchain status change...');
+    // Add a small delay to ensure transaction is fully processed
+    setTimeout(async () => {
+      await this.checkLobbyStatus();
+    }, 1000);
+  }
+
   hide() {
-    this.eventBus.emit(new GutterAdModalEvent(false));
+    this.eventBus?.emit(new GutterAdModalEvent(false));
     this.isVisible = false;
     this.showButtons = false;
+    
+    // Clear the lobby status checking interval
+    if (this.lobbyStatusCheckInterval) {
+      clearInterval(this.lobbyStatusCheckInterval);
+      this.lobbyStatusCheckInterval = null;
+    }
+    
+    // Stop watching blockchain events
+    if (this.eventUnwatcher) {
+      console.log('Stopping blockchain event watching for lobby:', this.currentGameId);
+      this.eventUnwatcher();
+      this.eventUnwatcher = null;
+    }
+    
     this.requestUpdate();
+  }
+
+  private shouldShowClaimButton(): boolean {
+    // Only show claim button if the current player won, game is finished, and prize not claimed
+    return this._title.includes(translateText("win_modal.you_won")) && 
+           this.currentGameId !== "" && 
+           this.lobbyInfo?.status === GameStatus.Finished;
+  }
+
+  private async checkLobbyStatus() {
+    if (!this.currentGameId || this.checkingLobbyStatus) return;
+
+    this.checkingLobbyStatus = true;
+    this.lobbyStatusError = "";
+
+    try {
+      const lobbyInfo = await getLobbyInfo(this.currentGameId);
+      this.lobbyInfo = lobbyInfo;
+      
+      if (lobbyInfo) {
+        console.log(`Lobby status: ${GameStatus[lobbyInfo.status]} (${lobbyInfo.status})`);
+      }
+    } catch (error) {
+      console.error('Error checking lobby status:', error);
+      this.lobbyStatusError = error instanceof Error ? error.message : 'Failed to check lobby status';
+    } finally {
+      this.checkingLobbyStatus = false;
+      this.requestUpdate();
+    }
+  }
+
+  private async _handleClaimPrize() {
+    if (this.claimingPrize || !this.currentGameId) return;
+    
+    this.claimingPrize = true;
+    this.prizeClaimStatus = "";
+    this.requestUpdate();
+    
+    try {
+      const result = await claimPrize({ lobbyId: this.currentGameId });
+      this.prizeClaimStatus = `Success! Transaction: ${result.hash.slice(0, 10)}...`;
+      
+      // Wait for transaction confirmation and then refresh status multiple times
+      this.waitForStatusUpdate();
+    } catch (error) {
+      this.prizeClaimStatus = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    } finally {
+      this.claimingPrize = false;
+      this.requestUpdate();
+    }
+  }
+
+  private async waitForStatusUpdate() {
+    // With event watching, we don't need to poll as aggressively
+    // Just wait a bit for the transaction to be confirmed
+    console.log('Waiting for blockchain event confirmation...');
+    
+    // The event watcher will automatically update status when PrizeClaimed event is received
+    // Just do a single check after a reasonable delay for transaction confirmation
+    setTimeout(async () => {
+      await this.checkLobbyStatus();
+    }, 3000);
+  }
+
+  private getStatusColor(status: GameStatus): string {
+    switch (status) {
+      case GameStatus.Created:
+        return '#ccc';
+      case GameStatus.InProgress:
+        return '#90ee90';
+      case GameStatus.Finished:
+        return '#ffa500';
+      case GameStatus.Claimed:
+        return '#4a9eff';
+      default:
+        return '#ccc';
+    }
+  }
+
+  private formatEther(wei: bigint): string {
+    // Simple ETH formatting - convert wei to ETH
+    const eth = Number(wei) / 1e18;
+    return eth.toFixed(4);
   }
 
   private _handleExit() {
@@ -201,6 +422,10 @@ export class WinModal extends LitElement implements Layer {
   init() {}
 
   tick() {
+    if (this.game === undefined) throw new Error("Not initialized");
+    
+    // Set current game ID for claim functionality
+    this.currentGameId = this.game.gameID();
     const myPlayer = this.game.myPlayer();
     if (
       !this.hasShownDeathModal &&
@@ -216,10 +441,11 @@ export class WinModal extends LitElement implements Layer {
     const updates = this.game.updatesSinceLastTick();
     const winUpdates = updates !== null ? updates[GameUpdateType.Win] : [];
     winUpdates.forEach((wu) => {
+      if (this.game === undefined) return;
       if (wu.winner === undefined) {
         // ...
       } else if (wu.winner[0] === "team") {
-        this.eventBus.emit(new SendWinnerEvent(wu.winner, wu.allPlayersStats));
+        this.eventBus?.emit(new SendWinnerEvent(wu.winner, wu.allPlayersStats));
         if (wu.winner[1] === this.game.myPlayer()?.team()) {
           this._title = translateText("win_modal.your_team");
         } else {
@@ -233,7 +459,7 @@ export class WinModal extends LitElement implements Layer {
         if (!winner?.isPlayer()) return;
         const winnerClient = winner.clientID();
         if (winnerClient !== null) {
-          this.eventBus.emit(
+          this.eventBus?.emit(
             new SendWinnerEvent(["player", winnerClient], wu.allPlayersStats),
           );
         }

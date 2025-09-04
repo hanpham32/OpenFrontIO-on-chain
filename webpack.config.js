@@ -9,8 +9,17 @@ import webpack from "webpack";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const gitCommit =
-  process.env.GIT_COMMIT ?? execSync("git rev-parse HEAD").toString().trim();
+const gitCommit = (() => {
+  if (process.env.GIT_COMMIT) {
+    return process.env.GIT_COMMIT;
+  }
+  try {
+    return execSync("git rev-parse HEAD").toString().trim();
+  } catch (error) {
+    // Fallback for environments without git (like Vercel)
+    return `build-${Date.now()}`;
+  }
+})();
 
 export default async (env, argv) => {
   const isProduction = argv.mode === "production";
@@ -21,7 +30,10 @@ export default async (env, argv) => {
       publicPath: "/",
       filename: "js/[name].[contenthash].js", // Added content hash
       path: path.resolve(__dirname, "static"),
-      clean: isProduction,
+      clean: {
+        keep: /\.(json|md|webp|png|jpe?g|gif|svg|ico|txt|html)$/,
+        dry: false,
+      },
     },
     module: {
       rules: [
@@ -38,10 +50,7 @@ export default async (env, argv) => {
         },
         {
           test: /\.md$/,
-          type: "asset/resource", // Changed from raw-loader
-          generator: {
-            filename: "text/[name].[contenthash][ext]", // Added content hash
-          },
+          type: "asset/source", // Return the content as string
         },
         {
           test: /\.ts$/,
@@ -121,6 +130,9 @@ export default async (env, argv) => {
           : false,
       }),
       new webpack.DefinePlugin({
+        "process.env.WEBSOCKET_HOST": JSON.stringify(
+          process.env.WEBSOCKET_HOST || (isProduction ? "34.36.164.25" : "localhost")
+        ),
         "process.env.WEBSOCKET_URL": JSON.stringify(
           isProduction ? "" : "localhost:3000",
         ),
@@ -128,6 +140,21 @@ export default async (env, argv) => {
         "process.env.GIT_COMMIT": JSON.stringify(gitCommit),
         "process.env.STRIPE_PUBLISHABLE_KEY": JSON.stringify(
           process.env.STRIPE_PUBLISHABLE_KEY,
+        ),
+        "process.env.VITE_WALLETCONNECT_PROJECT_ID": JSON.stringify(
+          process.env.VITE_WALLETCONNECT_PROJECT_ID,
+        ),
+        "process.env.VITE_PRIVY_APP_ID": JSON.stringify(
+          process.env.VITE_PRIVY_APP_ID,
+        ),
+        "process.env.VITE_PRIVY_CLIENT_ID": JSON.stringify(
+          process.env.VITE_PRIVY_CLIENT_ID,
+        ),
+        "process.env.CONTRACT_ADDRESS": JSON.stringify(
+          process.env.CONTRACT_ADDRESS,
+        ),
+        "process.env.GAME_SERVER_PRIVATE_KEY": JSON.stringify(
+          process.env.GAME_SERVER_PRIVATE_KEY,
         ),
       }),
       new CopyPlugin({

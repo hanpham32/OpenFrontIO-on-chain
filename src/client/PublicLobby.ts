@@ -4,9 +4,10 @@ import { LitElement, html } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { ApiPublicLobbiesResponseSchema } from "../core/ExpressSchemas";
 import { JoinLobbyEvent } from "./Main";
-import { generateID } from "../core/Util";
+import { getClientID } from "../core/Util";
 import { terrainMapFileLoader } from "./TerrainMapFileLoader";
 import { translateText } from "../client/Utils";
+import { apiFetch } from "./ApiClient";
 
 @customElement("public-lobby")
 export class PublicLobby extends LitElement {
@@ -75,7 +76,7 @@ export class PublicLobby extends LitElement {
 
   async fetchLobbies(): Promise<GameInfo[]> {
     try {
-      const response = await fetch("/api/public_lobbies");
+      const response = await apiFetch("/api/public_lobbies");
       if (!response.ok)
         throw new Error(`HTTP error! status: ${response.status}`);
       const json = await response.json();
@@ -185,7 +186,19 @@ export class PublicLobby extends LitElement {
     this.currLobby = null;
   }
 
-  private lobbyClicked(lobby: GameInfo) {
+  private async getCurrentWalletAddress(): Promise<string | undefined> {
+    try {
+      const { getCurrentWalletAddress } = await import("./wallet");
+      const address = getCurrentWalletAddress();
+      console.log("PublicLobby: Getting current wallet address:", address);
+      return address;
+    } catch (error) {
+      console.warn("PublicLobby: Failed to get wallet address:", error);
+      return undefined;
+    }
+  }
+
+  private async lobbyClicked(lobby: GameInfo) {
     if (this.isButtonDebounced) {
       return;
     }
@@ -205,7 +218,8 @@ export class PublicLobby extends LitElement {
         new CustomEvent("join-lobby", {
           detail: {
             gameID: lobby.gameID,
-            clientID: generateID(),
+            clientID: getClientID(lobby.gameID),
+            walletAddress: await this.getCurrentWalletAddress(),
           } as JoinLobbyEvent,
           bubbles: true,
           composed: true,

@@ -15,13 +15,13 @@ import {
 } from "../core/game/Game";
 import { LitElement, html } from "lit";
 import { customElement, query, state } from "lit/decorators.js";
+import { generateID, getClientID } from "../core/Util";
 import { DifficultyDescription } from "./components/Difficulties";
 import { FlagInput } from "./FlagInput";
 import { JoinLobbyEvent } from "./Main";
 import { TeamCountConfig } from "../core/Schemas";
 import { UserSettings } from "../core/game/UserSettings";
 import { UsernameInput } from "./UsernameInput";
-import { generateID } from "../core/Util";
 import randomMap from "../../resources/images/RandomMap.webp";
 import { renderUnitTypeOptions } from "./utilities/RenderUnitTypeOptions";
 import { translateText } from "../client/Utils";
@@ -403,7 +403,7 @@ export class SinglePlayerModal extends LitElement {
       : this.disabledUnits.filter((u) => u !== unit);
   }
 
-  private startGame() {
+  private async startGame() {
     // If random map is selected, choose a random map now
     if (this.useRandomMap) {
       this.selectedMap = this.getRandomMap();
@@ -413,8 +413,8 @@ export class SinglePlayerModal extends LitElement {
       `Starting single player game with map: ${GameMapType[this.selectedMap as keyof typeof GameMapType]
       }${this.useRandomMap ? " (Randomly selected)" : ""}`,
     );
-    const clientID = generateID();
     const gameID = generateID();
+    const clientID = getClientID(gameID);
 
     const usernameInput = document.querySelector(
       "username-input",
@@ -432,6 +432,7 @@ export class SinglePlayerModal extends LitElement {
         detail: {
           clientID,
           gameID,
+          walletAddress: await this.getCurrentWalletAddress(),
           gameStartInfo: {
             gameID,
             players: [
@@ -443,6 +444,7 @@ export class SinglePlayerModal extends LitElement {
                     ? ""
                     : flagInput.getCurrentFlag(),
                 pattern: this.userSettings.getSelectedPattern(),
+                walletAddress: await this.getCurrentWalletAddress(),
               },
             ],
             config: {
@@ -469,5 +471,15 @@ export class SinglePlayerModal extends LitElement {
       }),
     );
     this.close();
+  }
+
+  private async getCurrentWalletAddress(): Promise<string> {
+    try {
+      const { getCurrentWalletAddress } = await import("./wallet");
+      return getCurrentWalletAddress() || "";
+    } catch (error) {
+      console.warn("Failed to get wallet address for single player:", error);
+      return "";
+    }
   }
 }
